@@ -332,7 +332,7 @@ st.sidebar.header("📊 Dashboard Selection")
 
 dashboard_options = []
 if bpr_df is not None:
-    dashboard_options.extend(["BPR Analysis", "BPR Summary by Location & Color", "Supply Chain Analytics"])
+    dashboard_options.extend(["BPR Analysis", "BPR Summary by Location & Color"])
 if supply_chain_data is not None:
     dashboard_options.append("Supply Chain Analytics")
 
