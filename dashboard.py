@@ -95,11 +95,17 @@ def get_all_colors(df, color_column='On hand Inv. Color'):
         return []
 
     raw_colors = df[color_column].dropna().unique().tolist()
-    normalized = sorted(list(set(
+    normalized = list(set(
         c.strip().title() for c in raw_colors
         if isinstance(c, str) and c.strip() and c.strip().title() != 'Nan'
-    )))
-    return normalized
+    ))
+    # Enforce fixed color sequence: Black, Red, Yellow, Green, White, Blue
+    FIXED_COLOR_ORDER = ['Black', 'Red', 'Yellow', 'Green', 'White', 'Blue']
+    ordered = [c for c in FIXED_COLOR_ORDER if c in normalized]
+    # Append any remaining colors not in the fixed order
+    remaining = [c for c in normalized if c not in FIXED_COLOR_ORDER]
+    ordered.extend(sorted(remaining))
+    return ordered
 
 
 # ===============================
@@ -413,7 +419,16 @@ if selected_dashboard == "BPR Analysis" and bpr_df is not None:
         st.info("Please adjust your filters in the sidebar.")
         st.stop()
 
-    selected_sku = st.sidebar.selectbox("Select SKU", skus, key='bpr_sku')
+    # Build SKU options with description
+    sku_desc_map = {}
+    for sku in skus:
+        desc = df.loc[df['SKUCode'] == sku, 'Description'].dropna().unique()
+        desc_str = str(desc[0]).strip() if len(desc) > 0 else ''
+        sku_desc_map[sku] = f"{sku} — {desc_str}" if desc_str and desc_str != 'nan' else str(sku)
+
+    sku_display_options = [sku_desc_map[s] for s in skus]
+    selected_sku_display = st.sidebar.selectbox("Select SKU", sku_display_options, key='bpr_sku')
+    selected_sku = skus[sku_display_options.index(selected_sku_display)]
     st.markdown("---")
 
     # ===============================
@@ -435,14 +450,22 @@ if selected_dashboard == "BPR Analysis" and bpr_df is not None:
         for i, color in enumerate(color_order):
             row_data = {'Row Labels': f"{i + 1}. {color}"}
 
+            row_norm_total = 0
+            row_stock_total = 0
             for loc_type in sku_location_types:
                 filtered = sku_all_locations[
                     (sku_all_locations['On hand Inv. Color'] == color) &
                     (sku_all_locations['Location Type'] == loc_type)
                 ]
-                row_data[f'Sum of {loc_type} Norm'] = int(filtered['Norm'].sum())
-                row_data[f'Sum of {loc_type} Stock'] = int(filtered['Stock'].sum())
+                norm_val = int(filtered['Norm'].sum())
+                stock_val = int(filtered['Stock'].sum())
+                row_data[f'Sum of {loc_type} Norm'] = norm_val
+                row_data[f'Sum of {loc_type} Stock'] = stock_val
+                row_norm_total += norm_val
+                row_stock_total += stock_val
 
+            row_data['Row Total Norm'] = row_norm_total
+            row_data['Row Total Stock'] = row_stock_total
             location_summary_data.append(row_data)
 
         # Unclassified rows (NaN/blank color)
@@ -453,19 +476,35 @@ if selected_dashboard == "BPR Analysis" and bpr_df is not None:
         ]
         if len(uncategorized) > 0:
             row_data = {'Row Labels': f'{len(color_order) + 1}. (Unclassified)'}
+            row_norm_total = 0
+            row_stock_total = 0
             for loc_type in sku_location_types:
                 filtered = uncategorized[uncategorized['Location Type'] == loc_type]
-                row_data[f'Sum of {loc_type} Norm'] = int(filtered['Norm'].sum())
-                row_data[f'Sum of {loc_type} Stock'] = int(filtered['Stock'].sum())
+                norm_val = int(filtered['Norm'].sum())
+                stock_val = int(filtered['Stock'].sum())
+                row_data[f'Sum of {loc_type} Norm'] = norm_val
+                row_data[f'Sum of {loc_type} Stock'] = stock_val
+                row_norm_total += norm_val
+                row_stock_total += stock_val
+            row_data['Row Total Norm'] = row_norm_total
+            row_data['Row Total Stock'] = row_stock_total
             location_summary_data.append(row_data)
             st.warning(f"⚠️ {len(uncategorized)} record(s) have no color classification")
 
         # Grand Total
         grand_total_row = {'Row Labels': 'Grand Total'}
+        gt_norm_total = 0
+        gt_stock_total = 0
         for loc_type in sku_location_types:
             filtered = sku_all_locations[sku_all_locations['Location Type'] == loc_type]
-            grand_total_row[f'Sum of {loc_type} Norm'] = int(filtered['Norm'].sum())
-            grand_total_row[f'Sum of {loc_type} Stock'] = int(filtered['Stock'].sum())
+            norm_val = int(filtered['Norm'].sum())
+            stock_val = int(filtered['Stock'].sum())
+            grand_total_row[f'Sum of {loc_type} Norm'] = norm_val
+            grand_total_row[f'Sum of {loc_type} Stock'] = stock_val
+            gt_norm_total += norm_val
+            gt_stock_total += stock_val
+        grand_total_row['Row Total Norm'] = gt_norm_total
+        grand_total_row['Row Total Stock'] = gt_stock_total
         location_summary_data.append(grand_total_row)
 
         location_summary_df = pd.DataFrame(location_summary_data)
@@ -525,7 +564,11 @@ if selected_dashboard == "BPR Analysis" and bpr_df is not None:
                     )
                     for c in ['Total Stock', 'Total Norm', 'Location Count']:
                         color_dist[c] = color_dist[c].astype(int)
-                    color_dist = color_dist.sort_values('Total Stock', ascending=False)
+                    # Sort by fixed color order: Black, Red, Yellow, Green, White, Blue
+                    FIXED_COLOR_ORDER = ['Black', 'Red', 'Yellow', 'Green', 'White', 'Blue']
+                    color_dist['_sort_key'] = color_dist['Color Status'].apply(
+                        lambda x: FIXED_COLOR_ORDER.index(x) if x in FIXED_COLOR_ORDER else len(FIXED_COLOR_ORDER))
+                    color_dist = color_dist.sort_values('_sort_key').drop(columns=['_sort_key'])
 
                     st.dataframe(sanitize_for_display(color_dist), width='stretch', hide_index=True)
 
@@ -593,6 +636,12 @@ if selected_dashboard == "BPR Analysis" and bpr_df is not None:
             'Location Type', 'Color Status', 'Total Stock', 'Total Norm',
             'Total GIT/Pending', 'Total Virtual Norm', 'Number of Locations'
         ]
+
+        # Sort by fixed color order: Black, Red, Yellow, Green, White, Blue
+        FIXED_COLOR_ORDER = ['Black', 'Red', 'Yellow', 'Green', 'White', 'Blue']
+        location_comparison['_sort_key'] = location_comparison['Color Status'].apply(
+            lambda x: FIXED_COLOR_ORDER.index(x) if x in FIXED_COLOR_ORDER else len(FIXED_COLOR_ORDER))
+        location_comparison = location_comparison.sort_values(['Location Type', '_sort_key']).drop(columns=['_sort_key'])
 
         # Calculate penetration per group
         location_comparison['Penetration %'] = location_comparison.apply(
@@ -815,6 +864,11 @@ if selected_dashboard == "BPR Analysis" and bpr_df is not None:
                         }).reset_index()
 
                         color_breakdown.columns = ['Color Status', 'Stock', 'Norm', 'Count']
+                        # Sort by fixed color order: Black, Red, Yellow, Green, White, Blue
+                        FIXED_COLOR_ORDER = ['Black', 'Red', 'Yellow', 'Green', 'White', 'Blue']
+                        color_breakdown['_sort_key'] = color_breakdown['Color Status'].apply(
+                            lambda x: FIXED_COLOR_ORDER.index(x) if x in FIXED_COLOR_ORDER else len(FIXED_COLOR_ORDER))
+                        color_breakdown = color_breakdown.sort_values('_sort_key').drop(columns=['_sort_key'])
                         color_breakdown['Penetration %'] = color_breakdown.apply(
                             lambda r: f"{calc_penetration(r['Norm'], r['Stock']):.2f}%", axis=1
                         )
@@ -989,6 +1043,8 @@ elif selected_dashboard == "BPR Summary by Location & Color" and bpr_df is not N
 
     for color in color_order:
         row_data = {'Color Status': color}
+        row_norm_total = 0
+        row_stock_total = 0
         for loc_type in location_types:
             filtered = df[(df['On hand Inv. Color'] == color) & (df['Location Type'] == loc_type)]
             norm_sum = int(filtered['Norm'].sum())
@@ -996,6 +1052,11 @@ elif selected_dashboard == "BPR Summary by Location & Color" and bpr_df is not N
             row_data[f'{loc_type} Norm'] = norm_sum
             row_data[f'{loc_type} Stock'] = stock_sum
             row_data[f'{loc_type} Pen%'] = f"{calc_penetration(norm_sum, stock_sum):.1f}%"
+            row_norm_total += norm_sum
+            row_stock_total += stock_sum
+        row_data['Row Total Norm'] = row_norm_total
+        row_data['Row Total Stock'] = row_stock_total
+        row_data['Row Total Pen%'] = f"{calc_penetration(row_norm_total, row_stock_total):.1f}%"
         summary_data.append(row_data)
 
     # Unclassified
@@ -1006,6 +1067,8 @@ elif selected_dashboard == "BPR Summary by Location & Color" and bpr_df is not N
     ]
     if len(unclassified) > 0:
         row_data = {'Color Status': '(Unclassified)'}
+        row_norm_total = 0
+        row_stock_total = 0
         for loc_type in location_types:
             filtered = unclassified[unclassified['Location Type'] == loc_type]
             n = int(filtered['Norm'].sum())
@@ -1013,10 +1076,17 @@ elif selected_dashboard == "BPR Summary by Location & Color" and bpr_df is not N
             row_data[f'{loc_type} Norm'] = n
             row_data[f'{loc_type} Stock'] = s
             row_data[f'{loc_type} Pen%'] = f"{calc_penetration(n, s):.1f}%"
+            row_norm_total += n
+            row_stock_total += s
+        row_data['Row Total Norm'] = row_norm_total
+        row_data['Row Total Stock'] = row_stock_total
+        row_data['Row Total Pen%'] = f"{calc_penetration(row_norm_total, row_stock_total):.1f}%"
         summary_data.append(row_data)
 
     # Grand Total
     grand_total = {'Color Status': 'Grand Total'}
+    gt_norm_total = 0
+    gt_stock_total = 0
     for loc_type in location_types:
         filtered = df[df['Location Type'] == loc_type]
         n = int(filtered['Norm'].sum())
@@ -1024,6 +1094,11 @@ elif selected_dashboard == "BPR Summary by Location & Color" and bpr_df is not N
         grand_total[f'{loc_type} Norm'] = n
         grand_total[f'{loc_type} Stock'] = s
         grand_total[f'{loc_type} Pen%'] = f"{calc_penetration(n, s):.1f}%"
+        gt_norm_total += n
+        gt_stock_total += s
+    grand_total['Row Total Norm'] = gt_norm_total
+    grand_total['Row Total Stock'] = gt_stock_total
+    grand_total['Row Total Pen%'] = f"{calc_penetration(gt_norm_total, gt_stock_total):.1f}%"
     summary_data.append(grand_total)
 
     summary_df = pd.DataFrame(summary_data)
@@ -1182,7 +1257,15 @@ elif selected_dashboard == "Supply Chain Analytics" and supply_chain_data is not
     
     # SKU Selection
     sku_list = sorted(sales["SKUCode"].unique())
-    selected_sku = st.sidebar.selectbox("Select SKU", sku_list, index=0, key='sc_sku')
+    # Build SKU options with description
+    sc_sku_desc_map = {}
+    for sku in sku_list:
+        desc = sales.loc[sales['SKUCode'] == sku, 'Description'].dropna().unique()
+        desc_str = str(desc[0]).strip() if len(desc) > 0 and 'Description' in sales.columns else ''
+        sc_sku_desc_map[sku] = f"{sku} — {desc_str}" if desc_str and desc_str != 'nan' else str(sku)
+    sc_sku_display_options = [sc_sku_desc_map[s] for s in sku_list]
+    selected_sku_display = st.sidebar.selectbox("Select SKU", sc_sku_display_options, index=0, key='sc_sku')
+    selected_sku = sku_list[sc_sku_display_options.index(selected_sku_display)]
     
     # Date Range Selection
     min_date = sales["invoice_date"].min()
